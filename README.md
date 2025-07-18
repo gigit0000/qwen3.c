@@ -26,7 +26,7 @@ make run
 Use OpenMP and set threads:
 ```sh
 # Compile and run
-make omprun
+make runomp
 OMP_NUM_THREADS=16 ./run Qwen3-0.6B-FP32.gguf  # Set your threads
 ```
 
