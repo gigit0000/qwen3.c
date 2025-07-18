@@ -601,7 +601,6 @@ int match_special_token(const char *str, int *match_len) {
             for (int j = 0; j < 151936; j++) { 
                 if (strcmp(vocab[j], tok) == 0) {
                     *match_len = len;
-                    printf("Special Token Index: %s -> %d\n", tok, j);                    
                     return j; // return token ID
                 }
             }
@@ -714,7 +713,7 @@ void encode(Tokenizer* t, char* rendered_prompt, int* prompt_tokens, int* num_pr
             fprintf(stderr, "Token not found in vocab: [%s]\n", tokens[i]);
         } else {
             token_ids[token_id_count++] = id;
-            printf("[%s] → id = %d\n", tokens[i], id);
+            //printf("[%s] → id = %d\n", tokens[i], id);
         }
     // TODO
     for (int i = 0; i < token_id_count; i++) {
@@ -970,7 +969,7 @@ void chat(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, char
             if (multi_turn == 0) {
             append_tokens(tb, prompt_tokens, num_prompt_tokens);
                 for (size_t i = 0; i < tb->size; i++) {
-                    printf("%d ", tb->data[i]);
+                    // printf("%d ", tb->data[i]);
                 }
                 printf("\n");
             }
@@ -1016,8 +1015,8 @@ void error_usage() {
     fprintf(stderr, "  -t <float>  temperature in [0,inf], default 1.0\n");
     fprintf(stderr, "  -p <float>  p value in top-p (nucleus) sampling in [0,1] default 0.9\n");
     fprintf(stderr, "  -s <int>    random seed, default time(NULL)\n");
-    fprintf(stderr, "  -m <int>    multi-turn: 0 = on (defualt), 1 = off \n");
-    fprintf(stderr, "  -k <int>    reasoning: 0 = on (defualt), 1 = off \n");
+    fprintf(stderr, "  -m <int>    multi-turn: 0 = on, 1 = off (defualt)\n");
+    fprintf(stderr, "  -k <int>    reasoning: 0 = on, 1 = off (defualt)\n");
     exit(EXIT_FAILURE);
 }
 
@@ -1032,8 +1031,8 @@ int main(int argc, char *argv[]) {
     unsigned long long rng_seed = 0; // seed rng with time by default
     char *mode = "chat";        // generate|chat
     char *system_prompt = NULL; // the (optional) system prompt to use in chat mode
-    int multi_turn = 0;  // multi-turn conversation
-    int think_on = 0;    //  reasoning on
+    int multi_turn = 1;  // multi-turn conversation
+    int think_on = 1;    //  reasoning on
 
     if (argc >= 2) { checkpoint_path = argv[1]; } else { error_usage(); }
     for (int i = 2; i < argc; i+=2) {
