@@ -1,10 +1,12 @@
 # qwen3.c
 
-`qwen3.c` is a minimal, single-file C implementation of Qwen3 model inference, designed to run without any dependencies. It directly loads GGUF-format tensors without any conversion, making it self-contained.
+`qwen3.c` is a minimal, single-file C implementation of Qwen3 model inference, designed to run without any dependencies and inherited from llama2.c. It directly loads GGUF-format tensors without any conversion, making it self-contained.
 
-Just for clarity, vocab and merges are read from .txt files, even though the GGUF  already includes binary tokenizer. The overhead from tokenization and detokenization is negligible compared to the forward pass, so it has little to no effect on TTS. This implementation supports multi-turn conversation, but it uses a naive full-token pass, which causes TTFT to increase as the number of tokens grows.
+Just for clarity, vocab and merges are read from .txt files, even though the GGUF  already includes binary tokenizer. The overhead from tokenization and detokenization is negligible compared to the forward pass, so it has little to no effect on TTS. This implementation supports multi-turn conversation, but it uses a naive full-token pass, which causes TTFT to increase as the number of tokens grows at the moment. With OpenMP enabled in a single-turn conversation, TPS stays decent. 
 
-The code runs the `0.6B Qwen3` model in full precision for simplicity. Since GGUF models are mostly quantized to 8-bit or lower, you should use the FP32 version, or convert from BF16 yourself via the conversion script in this repo. I tweaked it to ensure the layers are sorted numerically. 
+The C code runs the `0.6B Qwen3` model in full precision for simplicity. Since GGUF models are quantized to 8-bit or lower, you should use the FP32 version by cloning from HF, or you can convert from BF16 yourself via the conversion script in this repo. I tweaked it to ensure the layers are sorted in consecutive numerical order, since memory mapping in C jumps block by block.
+
+
 
 ## Quick Start
 
