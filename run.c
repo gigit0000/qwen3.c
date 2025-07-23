@@ -29,22 +29,23 @@ typedef struct {
 typedef struct {
     // token embedding table
     float* token_embedding_table;    // (vocab_size, dim)
-    // weights for rmsnorms
-    float* rms_att_weight; // (layer, dim) rmsnorm weights
+    // weights for rmsnorms in each layer
+    float* rms_att_weight; // (layer, dim)
     float* rms_ffn_weight; // (layer, dim)
-    // weights for matmuls. note dim == n_heads * head_size
-    float* wq; // (layer, dim, n_heads * head_size)
-    float* wk; // (layer, dim, n_kv_heads * head_size)
-    float* wv; // (layer, dim, n_kv_heads * head_size)
-    float* wo; // (layer, n_heads * head_size, dim)
+    // weights for matmuls
+    float *wq; // (layer, dim, n_heads * head_dim)
+    float *wk; // (layer, dim, n_kv_heads * head_dim)
+    float *wv; // (layer, dim, n_kv_heads * head_dim)
+    float *wo; // (layer, n_heads * head_dim, dim)
     float* wq_norm; // (layer, head_dim)
     float* wk_norm; // (layer, head_dim)
-    // weights for ffn
-    float* w1; // (layer, hidden_dim, dim)
-    float* w2; // (layer, dim, hidden_dim)
-    float* w3; // (layer, hidden_dim, dim)
+    // weights for ffn. w1 = up, w3 = gate, w2 = down
+    float *w1; // (layer, dim, hidden_dim)
+    float *w2; // (layer, hidden_dim, dim)
+    float *w3; // (layer, dim, hidden_dim)
     // final rmsnorm
     float* rms_final_weight; // (dim,)
+    // Same as token_embedding_table. GGUF has the final layer anyway
     float* wcls;
 } TransformerWeights;
 
@@ -53,10 +54,10 @@ typedef struct {
     float* x; // activation at current time stamp (dim,)
     float* xb; // buffer (dim,)
     float* xb2; // an additional buffer just for convenience (dim,)
-    float* xb3; // an additional buffer just for convenience 
+    float* xb3; // an additional buffer just for convenience (att_head_dim,)
     float* hb; // buffer for hidden dimension in the ffn (hidden_dim,)
     float* hb2; // buffer for hidden dimension in the ffn (hidden_dim,)
-    float* q; // query 
+    float* q;   // query (att_head_dim,)
     float* k; // key (dim,)
     float* v; // value (dim,)
     float* att; // buffer for scores/attention values (n_heads, seq_len)
@@ -119,7 +120,6 @@ void free_run_state(RunState* s) {
 
 // Map GGUF layers to transformer weights
 void memory_map_weights(TransformerWeights* w, Config* p, void* pt) {
-    //int head_size = p->dim / p->n_heads;
     unsigned long long n_layers = p->n_layers;
     float *ptr = (float*) pt; 
 
@@ -146,13 +146,15 @@ void memory_map_weights(TransformerWeights* w, Config* p, void* pt) {
     w->w2 = ptr;
     ptr += p->hidden_dim * p->dim; //ffn.down 3072 *1024 
     w->w3 = ptr;
-    ptr += p->hidden_dim * p->dim; // ffn.gate   
+    ptr += p->dim * p->hidden_dim; // ffn.gate
     w->rms_ffn_weight = ptr;
     ptr += p->dim;                 // ffn.norm
     w->w1 = ptr;
     ptr += p->dim * p->hidden_dim; //ffn.up
 }
 
+// --------------------------------------
+// read GGUF
 void read_checkpoint(char *checkpoint, Config *config, TransformerWeights* weights, int* fd, float** data, ssize_t* file_size) {
     FILE *file = fopen(checkpoint, "rb");
     if (!file) { fprintf(stderr, "Couldn't open file %s\n", checkpoint); exit(EXIT_FAILURE); }
@@ -175,7 +177,7 @@ void read_checkpoint(char *checkpoint, Config *config, TransformerWeights* weigh
 }
 
 void build_transformer(Transformer *t, char *checkpoint_path) {
-    // read in the Config and the Weights from the checkpoint
+    // read in the Weights from the GGUF
     read_checkpoint(checkpoint_path, &t->config, &t->weights, &t->fd, &t->data, &t->file_size);
     // allocate the RunState buffers
     malloc_run_state(&t->state, &t->config);
@@ -188,6 +190,7 @@ void free_transformer(Transformer *t) {
     }
 }
 
+// load the GGUF config file
 void load_config(Transformer *t) {
     FILE *f = fopen("header.txt", "r");
     if (!f) {perror("Failed to open header.txt"); exit(1);}
@@ -484,6 +487,7 @@ typedef struct {
     size_t capacity;   // total allocated capacity
 } TokenBuffer;
 
+// ========== LOAD VOCAB ==========
 void load_vocab(const char *path) {
     FILE *f = fopen(path, "r");
     if (!f) {
