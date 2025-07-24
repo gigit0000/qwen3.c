@@ -33,16 +33,16 @@ typedef struct {
     float* rms_att_weight; // (layer, dim)
     float* rms_ffn_weight; // (layer, dim)
     // weights for matmuls
-    float *wq; // (layer, dim, n_heads * head_dim)
-    float *wk; // (layer, dim, n_kv_heads * head_dim)
-    float *wv; // (layer, dim, n_kv_heads * head_dim)
-    float *wo; // (layer, n_heads * head_dim, dim)
+    float* wq; // (layer, dim, n_heads * head_dim)
+    float* wk; // (layer, dim, n_kv_heads * head_dim)
+    float* wv; // (layer, dim, n_kv_heads * head_dim)
+    float* wo; // (layer, n_heads * head_dim, dim)
     float* wq_norm; // (layer, head_dim)
     float* wk_norm; // (layer, head_dim)
     // weights for ffn. w1 = up, w3 = gate, w2 = down
-    float *w1; // (layer, dim, hidden_dim)
-    float *w2; // (layer, hidden_dim, dim)
-    float *w3; // (layer, dim, hidden_dim)
+    float* w1; // (layer, dim, hidden_dim)
+    float* w2; // (layer, hidden_dim, dim)
+    float* w3; // (layer, dim, hidden_dim)
     // final rmsnorm
     float* rms_final_weight; // (dim,)
     // Same as token_embedding_table. GGUF has the final layer anyway
@@ -940,9 +940,10 @@ void chat(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, char
     int token;       // stores the current token to feed into the transformer
     int prev_token;
     int pos = 0;     // position in the sequence
+    double timer = -1.0;   // TPS timer start
+    int count = 0;         // decoded token
 
     while (1) { 
-        // when it is the user's turn to contribute tokens to the dialog...
         if (user_turn) {
                 if (pos == 0){
                     read_stdin("Enter system prompt (or Enter to skip): ", system_prompt, sizeof(system_prompt));
