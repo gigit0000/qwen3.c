@@ -925,7 +925,7 @@ void read_stdin(const char* guide, char* buffer, size_t bufsize) {
 
 // ----------------------------------------------------------------------------
 // chat loop
-void chat(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, char* cli_user_prompt, char* cli_system_prompt, int think_on, int multi_turn, TokenBuffer* tb) {
+void chat(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, char* cli_user_prompt, char* cli_system_prompt, int think_on, int multi_turn, int tps, TokenBuffer* tb) {
     // buffers for reading the system prompt and user prompt from stdin
     char system_prompt[512];
     char user_prompt[8192]; 
@@ -999,12 +999,35 @@ void chat(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, char
                 //printf("next token: %d\n",  next);
             }
             
+<<<<<<< HEAD
             if (next == 151645) { printf("\n"); user_turn = 1;} // EOS token ID - TODO
+=======
+            if (next == 151645) { // EOS token ID - TODO
+                printf("\n");
+                user_turn = 1;
+                
+                // TPS
+                if (tps == 0) {
+                fprintf(stderr, "tok/s: %f\n", count / (double)(time_in_ms() - timer) * 1000);
+                timer = -1;
+                count = 0;
+                }
+            }
+>>>>>>> 65b4b74... TPS complete
             else {
             char *decoded = decode_token_id(next);
             printf("%s", decoded);
             fflush(stdout);
             free(decoded);
+<<<<<<< HEAD
+=======
+
+                if (tps == 0) {
+                    count += 1;
+                    // timer starts after the first token generation
+                    if (timer == -1.0) {timer = time_in_ms();}
+                }
+>>>>>>> 65b4b74... TPS complete
             }
         }
     }
@@ -1021,6 +1044,7 @@ void error_usage() {
     fprintf(stderr, "  -s <int>    random seed, default time(NULL)\n");
     fprintf(stderr, "  -m <int>    multi-turn: 0 = on, 1 = off (defualt)\n");
     fprintf(stderr, "  -k <int>    reasoning: 0 = on, 1 = off (defualt)\n");
+    fprintf(stderr, "  -r <int>    TPS: 0 = on, 1 = off (defualt)\n");
     exit(EXIT_FAILURE);
 }
 
@@ -1037,6 +1061,7 @@ int main(int argc, char *argv[]) {
     char *system_prompt = NULL; // the (optional) system prompt to use in chat mode
     int multi_turn = 1;  // multi-turn conversation
     int think_on = 1;    //  reasoning on
+    int tps = 1;         // TPS 
 
     if (argc >= 2) { checkpoint_path = argv[1]; } else { error_usage(); }
     for (int i = 2; i < argc; i+=2) {
@@ -1052,7 +1077,10 @@ int main(int argc, char *argv[]) {
         multi_turn = argv[i+1][0] - '0';} else { error_usage(); } }
         else if (argv[i][1] == 'k') {if ((argv[i+1][0] == '0' || argv[i+1][0] == '1') && argv[i+1][1] == '\0') {
         think_on = argv[i+1][0] - '0';} else { error_usage(); } }
+        else if (argv[i][1] == 'r') {if ((argv[i+1][0] == '0' || argv[i+1][0] == '1') && argv[i+1][1] == '\0') {
+        tps = argv[i+1][0] - '0';} else { error_usage(); } }
         else { error_usage(); }
+        
     }
 
     // parameter validation/overrides
@@ -1078,16 +1106,15 @@ int main(int argc, char *argv[]) {
 
     Sampler sampler;
     build_sampler(&sampler, transformer.config.vocab_size, temperature, topp, rng_seed);
-    
-    printf("Multi-turn = %s, thinKing = %s, Temperature = %.2f, top-P = %.2f\n", multi_turn ? "off" : "on",
-    think_on ? "off" : "on", temperature, topp);
+
+    printf("Multi-turn = %s, thinKing = %s, TPS = %s, Temperature = %.2f, top-P = %.2f\n", multi_turn ? "off" : "on", think_on ? "off" : "on", tps ? "off" : "on", temperature, topp);
     printf("Strike Enter when you wanna exit this chat\n");
 
     // run!
     if (strcmp(mode, "generate") == 0) {
         //generate(&transformer, &tokenizer, &sampler, prompt); 
     } else if (strcmp(mode, "chat") == 0) {
-        chat(&transformer, &tokenizer, &sampler, prompt, system_prompt, think_on, multi_turn, &tb); 
+        chat(&transformer, &tokenizer, &sampler, prompt, system_prompt, think_on, multi_turn, tps, &tb); 
     } else {
         fprintf(stderr, "unknown mode: %s\n", mode);
         error_usage();
