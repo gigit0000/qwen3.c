@@ -999,9 +999,6 @@ void chat(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, char
                 //printf("next token: %d\n",  next);
             }
             
-<<<<<<< HEAD
-            if (next == 151645) { printf("\n"); user_turn = 1;} // EOS token ID - TODO
-=======
             if (next == 151645) { // EOS token ID - TODO
                 printf("\n");
                 user_turn = 1;
@@ -1013,21 +1010,17 @@ void chat(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, char
                 count = 0;
                 }
             }
->>>>>>> 65b4b74... TPS complete
             else {
             char *decoded = decode_token_id(next);
             printf("%s", decoded);
             fflush(stdout);
             free(decoded);
-<<<<<<< HEAD
-=======
 
                 if (tps == 0) {
                     count += 1;
                     // timer starts after the first token generation
                     if (timer == -1.0) {timer = time_in_ms();}
                 }
->>>>>>> 65b4b74... TPS complete
             }
         }
     }
