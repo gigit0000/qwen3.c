@@ -963,7 +963,7 @@ void chat(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, char
                 sprintf(rendered_prompt, user_template, user_prompt);
             }
 
-            if (think_on == 1) {
+            if (!think_on) {
                 strcat(rendered_prompt, "<think>\n\n</think>\n");
             }
 
@@ -971,7 +971,7 @@ void chat(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, char
             encode(tokenizer, rendered_prompt, prompt_tokens, &num_prompt_tokens, multi_turn);
             pos = 0; // reset the user index
             user_turn = 0;  
-            if (multi_turn == 0) {
+            if (multi_turn) {
             append_tokens(tb, prompt_tokens, num_prompt_tokens);
                 for (size_t i = 0; i < tb->size; i++) {
                     // printf("%d ", tb->data[i]);
@@ -981,8 +981,8 @@ void chat(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, char
             printf("A: ");
         }
 
-        if (pos < (multi_turn == 0 ? tb->size : num_prompt_tokens)) {
-            token = (multi_turn == 0) ? tb->data[pos] : prompt_tokens[pos];
+        if (pos < (multi_turn ? tb->size : num_prompt_tokens)) {
+            token = (multi_turn) ? tb->data[pos] : prompt_tokens[pos];
         } else {
             token = next;
         }
@@ -994,8 +994,8 @@ void chat(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, char
         pos++;
         //printf("num_prompt_tokens: %d \n", num_prompt_tokens);
         // decoding and printing
-        if (pos >= (multi_turn == 0 ? tb->size : num_prompt_tokens)) {
-            if (multi_turn == 0) {
+        if (pos >= (multi_turn ? tb->size : num_prompt_tokens)) {
+            if (multi_turn) {
                 append_tokens(tb, &next, 1);
                 //printf("next token: %d\n",  next);
             }
@@ -1005,7 +1005,7 @@ void chat(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, char
                 user_turn = 1;
                 
                 // TPS
-                if (tps == 0) {
+                if (tps) {
                 fprintf(stderr, "tok/s: %f\n", count / (double)(time_in_ms() - timer) * 1000);
                 timer = -1;
                 count = 0;
@@ -1017,7 +1017,7 @@ void chat(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, char
             fflush(stdout);
             free(decoded);
 
-                if (tps == 0) {
+                if (tps) {
                     count += 1;
                     // timer starts after the first token generation
                     if (timer == -1.0) {timer = time_in_ms();}
@@ -1036,9 +1036,9 @@ void error_usage() {
     fprintf(stderr, "  -t <float>  temperature in [0,inf], default 1.0\n");
     fprintf(stderr, "  -p <float>  p value in top-p (nucleus) sampling in [0,1] default 0.9\n");
     fprintf(stderr, "  -s <int>    random seed, default time(NULL)\n");
-    fprintf(stderr, "  -m <int>    multi-turn: 0 = on, 1 = off (defualt)\n");
-    fprintf(stderr, "  -k <int>    reasoning: 0 = on, 1 = off (defualt)\n");
-    fprintf(stderr, "  -r <int>    TPS: 0 = on, 1 = off (defualt)\n");
+    fprintf(stderr, "  -m <int>    multi-turn: 0 = off (defualt), 1 = on\n");
+    fprintf(stderr, "  -k <int>    reasoning: 0 = off (defualt), 1 = on\n");
+    fprintf(stderr, "  -r <int>    TPS: 0 = off (defualt), 1 = on\n");
     exit(EXIT_FAILURE);
 }
 
@@ -1053,9 +1053,9 @@ int main(int argc, char *argv[]) {
     unsigned long long rng_seed = 0; // seed rng with time by default
     char *mode = "chat";        // generate|chat
     char *system_prompt = NULL; // the (optional) system prompt to use in chat mode
-    int multi_turn = 1;  // multi-turn conversation
-    int think_on = 1;    //  reasoning on
-    int tps = 1;         // TPS 
+    int multi_turn = 0;  // multi-turn conversation
+    int think_on = 0;    //  reasoning on
+    int tps = 0;         // TPS 
 
     if (argc >= 2) { checkpoint_path = argv[1]; } else { error_usage(); }
     for (int i = 2; i < argc; i+=2) {
@@ -1101,8 +1101,8 @@ int main(int argc, char *argv[]) {
     Sampler sampler;
     build_sampler(&sampler, transformer.config.vocab_size, temperature, topp, rng_seed);
 
-    printf("Multi-turn = %s, thinKing = %s, TPS = %s, Temperature = %.2f, top-P = %.2f\n", multi_turn ? "off" : "on", think_on ? "off" : "on", tps ? "off" : "on", temperature, topp);
-    printf("Strike Enter when you wanna exit this chat\n");
+    printf("Multi-turn = %s, thinKing = %s, tps(R) = %s, Temperature = %.2f, top-P = %.2f\n", multi_turn ? "on" : "off", think_on ? "on" : "off", tps ? "on" : "off", temperature, topp);
+    printf("Press Enter to exit the chat\n");
 
     // run!
     if (strcmp(mode, "generate") == 0) {
