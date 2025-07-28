@@ -2,7 +2,7 @@
 
 `qwen3.c` is a minimal, single-file C implementation of Qwen3 model inference, designed to run without any dependencies and inherited from llama2.c. It directly loads GGUF-format tensors without any conversion, making it self-contained.
 
-Just for clarity, vocab and merges are read from .txt files, even though the GGUF  already includes binary tokenizer. The overhead from tokenization and detokenization is negligible compared to the forward pass, so it has little to no effect on TTS. This implementation supports multi-turn conversation, but it uses a naive full-token pass, which causes TTFT to increase as the number of tokens grows at the moment. With OpenMP enabled in a single-turn conversation, TPS stays decent. 
+Just for clarity, the tokenizer reads vocab and merges from .txt files, which makes it way easier to understand. The overhead from tokenization and detokenization from text files is negligible compared to the forward pass, so it has little to no effect on TTS. The  implementation supports multi-turn conversation, but it uses a naive full-token pass, which causes TTFT or the prefill time to increase as the number of tokens grows at the moment. With OpenMP enabled, TPS stays decent at about 6 tokens per second on a 4-core machine. 
 
 The C code runs the `0.6B Qwen3` model in full precision for simplicity. Since GGUF models are quantized to 8-bit or lower, you should use the FP32 version by cloning from HF, or you can convert from BF16 yourself via the conversion script in this repo. I tweaked it to ensure the layers are sorted in consecutive numerical order, since memory mapping in C jumps block by block.
 
@@ -47,11 +47,11 @@ python extract_v_m.py Qwen3-0.6B-FP32.gguf
 
 ### Inference Examples
 
-Multi-turn Conversation
+Multi-turn Conversation with the option m
 ```
-# OMP_NUM_THREADS=16 ./runb Qwen3-0.6B-FP32.gguf -m 0 -k 1
+# OMP_NUM_THREADS=16 ./runb Qwen3-0.6B-FP32.gguf -m 1 -k 0
 Multi-turn = on, thinKing = off, Temperature = 0.60, top-P = 0.95
-Strike Enter when you wanna exit this chat
+Press Enter to exit the chat
 Enter system prompt (or Enter to skip): Tell me in one sentence
 Q: Where is the best spot in Paris?
 A: The best spot in Paris is the Eiffel Tower.
@@ -59,11 +59,11 @@ Q: What about the second-best spot?
 A: The second-best spot in Paris is the Louvre Museum.
 ```
 
-Reasoning
+Reasoning with the option k
 ```
-# OMP_NUM_THREADS=16 ./run Qwen3-0.6B-FP32.gguf -k 0
+# OMP_NUM_THREADS=16 ./run Qwen3-0.6B-FP32.gguf -k 1
 Multi-turn = off, thinKing = on, Temperature = 0.60, top-P = 0.95
-Strike Enter when you wanna exit this chat
+Press Enter to exit the chat
 Enter system prompt (or Enter to skip): 
 Q: Why do stars shine? Give me a quick answer!
 A: <think>
@@ -78,10 +78,21 @@ I need to keep it simple and concise. The user probably wants a quick answer, so
 
 Stars shine because they produce light through nuclear fusion of hydrogen into helium in their cores. This energy is then released as visible light, giving them their luminous glow.
 ```
+You can enable and monitor TPS with the r option:
+```
+OMP_NUM_THREADS=6 ./run Qwen3-0.6B-FP32.gguf -r 1 
+Multi-turn = on, thinKing = off, tps(R) = on, Temperature = 0.60, top-P = 0.95
+Press Enter to exit the chat
+Enter system prompt (or Enter to skip): You name is Kim.
+Q: What is your name?
+A: My name is Kim.
+tok/s: 6.686930
+```
+
 
 ## (Probable) To Do
 - [ ] Quantized versions
-- [ ] CUDA version
+- [X] CUDA version - I adapted the inference code for CUDA. You can check out https://github.com/gigit0000/qwen3.cu
 - [ ] Accelerated versions
 
 ## Acknoledgement

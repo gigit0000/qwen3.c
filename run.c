@@ -1051,7 +1051,6 @@ int main(int argc, char *argv[]) {
     int steps = 256;            // number of steps to run for
     char *prompt = NULL;        // prompt string
     unsigned long long rng_seed = 0; // seed rng with time by default
-    char *mode = "chat";        // generate|chat
     char *system_prompt = NULL; // the (optional) system prompt to use in chat mode
     int multi_turn = 0;  // multi-turn conversation
     int think_on = 0;    //  reasoning on
@@ -1073,8 +1072,7 @@ int main(int argc, char *argv[]) {
         think_on = argv[i+1][0] - '0';} else { error_usage(); } }
         else if (argv[i][1] == 'r') {if ((argv[i+1][0] == '0' || argv[i+1][0] == '1') && argv[i+1][1] == '\0') {
         tps = argv[i+1][0] - '0';} else { error_usage(); } }
-        else { error_usage(); }
-        
+        else { error_usage(); }        
     }
 
     // parameter validation/overrides
@@ -1105,14 +1103,8 @@ int main(int argc, char *argv[]) {
     printf("Press Enter to exit the chat\n");
 
     // run!
-    if (strcmp(mode, "generate") == 0) {
-        //generate(&transformer, &tokenizer, &sampler, prompt); 
-    } else if (strcmp(mode, "chat") == 0) {
-        chat(&transformer, &tokenizer, &sampler, prompt, system_prompt, think_on, multi_turn, tps, &tb); 
-    } else {
-        fprintf(stderr, "unknown mode: %s\n", mode);
-        error_usage();
-    }
+    chat(&transformer, &tokenizer, &sampler, prompt, system_prompt, think_on, multi_turn, tps, &tb); 
+
 
     // memory and file handles cleanup
     free_sampler(&sampler); 
