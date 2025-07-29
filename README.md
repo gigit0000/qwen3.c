@@ -32,9 +32,9 @@ make runomp
 OMP_NUM_THREADS=16 ./run Qwen3-0.6B-FP32.gguf  # the number of your cores
 ```
 
-You can enable reasoning (-k 0) or multi-turn (-m 0):
+You can enable reasoning (-k 1) or multi-turn (-m 1):
 ```
-./run Qwen3-0.6B-FP32.gguf -k 0 -m 0 
+./run Qwen3-0.6B-FP32.gguf -k 1 -m 1 
 ```
 ## Description
 
