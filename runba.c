@@ -51,6 +51,7 @@ typedef struct {
 
 typedef struct {
     // current wave of activations
+    // TODO remove the unused
     float* x; // activation at current time stamp (dim,)
     float* xb; // buffer (dim,)
     float* xb2; // an additional buffer just for convenience (dim,)
@@ -65,6 +66,19 @@ typedef struct {
     // kv cache
     float* key_cache;   // (layer, seq_len, dim)
     float* value_cache; // (layer, seq_len, dim)
+
+
+    float *batch_x;
+    float *batch_xb;
+    float *batch_xb2;
+    float *batch_xb3;
+    float *batch_q;
+    float *batch_k;
+    float *batch_v;
+    float *batch_att;
+    float *batch_hb;
+    float *batch_hb2;
+
 } RunState;
 
 typedef struct {
@@ -81,6 +95,7 @@ void malloc_run_state(RunState* s, Config *p) {
     int att_head_dim = p->n_heads * p->head_dim; 
     int kv_dim = p->n_kv_heads * p->head_dim;  // 1024  
 
+    // TODO -remove the unused
     s->x = calloc(p->dim, sizeof(float));
     s->xb = calloc(p->dim, sizeof(float));  
     s->xb2 = calloc(p->dim, sizeof(float));  
@@ -93,7 +108,22 @@ void malloc_run_state(RunState* s, Config *p) {
     s->att = calloc(p->n_heads * p->seq_len, sizeof(float));
     s->logits = calloc(p->vocab_size, sizeof(float));
     s->key_cache = calloc(p->n_layers * p->seq_len * kv_dim, sizeof(float));  
-    s->value_cache = calloc(p->n_layers * p->seq_len * kv_dim, sizeof(float)); 
+    s->value_cache = calloc(p->n_layers * p->seq_len * kv_dim, sizeof(float));
+
+    // Allocate batch tensors (assuming these are added to RunState or allocated here)
+    // For simplicity, assuming single token output - could be extended for full batch output
+    // temp context windows = 8192
+    int c_win = 8192;
+    s->batch_x = (float *)malloc(c_win * p->dim * sizeof(float));
+    s->batch_xb = (float *)malloc(c_win * p->dim * sizeof(float));
+    s->batch_xb2 = (float *)malloc(c_win * p->dim * sizeof(float));
+    s->batch_xb3 = (float *)malloc(c_win * att_head_dim * sizeof(float));
+    s->batch_q = (float *)malloc(c_win * att_head_dim * sizeof(float));
+    s->batch_k = (float *)malloc(c_win * kv_dim * sizeof(float));
+    s->batch_v = (float *)malloc(c_win * kv_dim * sizeof(float));
+    s->batch_att = (float *)malloc(c_win * p->n_heads * p->seq_len * sizeof(float));
+    s->batch_hb = (float *)malloc(c_win * p->hidden_dim * sizeof(float));
+    s->batch_hb2 = (float *)malloc(c_win * p->hidden_dim * sizeof(float));
 
     // ensure all mallocs went fine
     if (!s->x || !s->xb || !s->xb2 || !s->xb3 || !s->hb || !s->hb2 || !s->q || !s->k || !s->v || !s->att || !s->logits || !s->key_cache || !s->value_cache) {
@@ -116,6 +146,18 @@ void free_run_state(RunState* s) {
     free(s->logits);
     free(s->key_cache);
     free(s->value_cache);
+
+    // Cleanup batch tensors
+    free(s->batch_x);
+    free(s->batch_xb);
+    free(s->batch_xb2);
+    free(s->batch_xb3);
+    free(s->batch_q);
+    free(s->batch_k);
+    free(s->batch_v);
+    free(s->batch_att);
+    free(s->batch_hb);
+    free(s->batch_hb2);
 }
 
 // Map GGUF layers to transformer weights
@@ -243,22 +285,6 @@ void load_config(Transformer *t) {
 
 // ----------------------------------------------------------------------------
 // neural net blocks; the dynamics of the Transformer
-
-void rmsnorm(float* o, float* x, float* weight, int size) {
-    // calculate sum of squares
-    float ss = 0.0f;
-    for (int j = 0; j < size; j++) {
-        ss += x[j] * x[j];
-    }
-    ss /= size;
-    ss += 1e-6f;
-    ss = 1.0f / sqrtf(ss);
-    // normalize and scale
-    for (int j = 0; j < size; j++) {
-        o[j] = weight[j] * (ss * x[j]);
-    }
-}
-
 void softmax(float* x, int size) {
     // find max value (for numerical stability)
     float max_val = x[0];
@@ -280,21 +306,49 @@ void softmax(float* x, int size) {
     }
 }
 
-void matmul(float* xout, float* x, float* w, int n, int d) {
-    // W (d,n) @ x (n,) -> xout (d,)
-    // by far the most amount of time is spent inside this little function
-    int i;
-    #pragma omp parallel for private(i)
-    for (i = 0; i < d; i++) {
-        float val = 0.0f;
-        for (int j = 0; j < n; j++) {
-            val += w[i * n + j] * x[j];
+
+void batch_rmsnorm(float *batch_o, float *batch_x, float *weight, int size, int num_tokens) {
+    for (int b = 0; b < num_tokens; b++) {
+        float *o = batch_o + b * size;
+        float *x = batch_x + b * size;
+
+        // calculate sum of squares
+        float ss = 0.0f;
+        for (int j = 0; j < size; j++) {
+            ss += x[j] * x[j];
         }
-        xout[i] = val;
+        ss /= size;
+        ss += 1e-6f;
+        ss = 1.0f / sqrtf(ss);
+
+        // normalize and scale
+        for (int j = 0; j < size; j++) {
+            o[j] = weight[j] * (ss * x[j]);
+        }
     }
 }
 
-float* forward(Transformer* transformer, int token, int pos) {
+void batch_matmul(float *batch_xout, float *batch_x, float *w, int n, int d, int num_tokens) {
+    // Process all tokens in batch
+    for (int b = 0; b < num_tokens; b++) {
+        float *xout = batch_xout + b * d;
+        float *x = batch_x + b * n;
+
+        // W (d,n) @ x (n,) -> xout (d,)
+        int i;
+        #pragma omp parallel for private(i)
+        for (i = 0; i < d; i++) {
+            float val = 0.0f;
+            for (int j = 0; j < n; j++) {
+                val += w[i * n + j] * x[j];
+            }
+            xout[i] = val;
+        }
+    }
+}
+
+
+float* forward_batch(Transformer* transformer, int* tokens, int num_tokens, int start_pos) {
     Config* p = &transformer->config;
     TransformerWeights* w = &transformer->weights;
     RunState* s = &transformer->state;
@@ -305,133 +359,202 @@ float* forward(Transformer* transformer, int token, int pos) {
 
     int layer_offset = 62923776/4; // offset to the GGUF next layer for the same tensor type TODO
     
-    // copy the token embedding into s->x, STARTING POINT - x is passing through.
-    memcpy(s->x, w->token_embedding_table + token * p->dim, p->dim * sizeof(float));
+    // Copy token embeddings for all tokens in batch
+    for (int b = 0; b < num_tokens; b++) {
+        memcpy(s->batch_x + b * p->dim, 
+               w->token_embedding_table + tokens[b] * p->dim, 
+               p->dim * sizeof(float));
+    }
     
-    // forward all the layers
+    // Forward all the layers
     for (int l = 0; l < p->n_layers; l++) {
-        // kv cache
-        int loff = l * p->seq_len * kv_dim; 
-        s->k = s->key_cache + loff + pos * kv_dim;
-        s->v = s->value_cache + loff + pos * kv_dim;
+        int loff = l * p->seq_len * kv_dim;
 
-        // attention rmsnorm
-        rmsnorm(s->xb, s->x, w->rms_att_weight + l * layer_offset, p->dim);
+        // Process batch through attention rmsnorm
+        batch_rmsnorm(s->batch_xb, s->batch_x, w->rms_att_weight + l * layer_offset, p->dim, num_tokens);
 
-        matmul(s->q, s->xb, w->wq + l *layer_offset, p->dim, att_head_dim); 
-        matmul(s->k, s->xb, w->wk + l *layer_offset, p->dim, kv_dim);  
-        matmul(s->v, s->xb, w->wv + l *layer_offset, p->dim, kv_dim);   
+        // Batch matrix multiplications for Q, K, V
+        batch_matmul(s->batch_q, s->batch_xb, w->wq + l * layer_offset, p->dim, att_head_dim, num_tokens);
+        batch_matmul(s->batch_k, s->batch_xb, w->wk + l * layer_offset, p->dim, kv_dim, num_tokens);
+        batch_matmul(s->batch_v, s->batch_xb, w->wv + l * layer_offset, p->dim, kv_dim, num_tokens);
 
-        //  RoPE relative positional encoding
-        for (int h = 0; h < p->n_heads; h++) {
-            float *q = s->q + h * p->head_dim;
-            float *k = (h < p->n_kv_heads) ? s->k + h * p->head_dim : NULL;
-        
-            // Apply RMSNorm to query head
-            rmsnorm(q, q, w->wq_norm + l * layer_offset, p->head_dim);
-        
-            // Apply RMSNorm to key head if within n_kv_heads
-            if (h < p->n_kv_heads) {
-                rmsnorm(k, k, w->wk_norm + l * layer_offset, p->head_dim);
+        // Apply batch RMSNorm to all query heads
+        batch_rmsnorm(s->batch_q, s->batch_q, w->wq_norm + l * layer_offset, p->head_dim, num_tokens * p->n_heads);
+
+        // Apply batch RMSNorm to all key heads
+        batch_rmsnorm(s->batch_k, s->batch_k, w->wk_norm + l * layer_offset, p->head_dim, num_tokens * p->n_kv_heads);
+
+        // Apply rotary position encoding
+        for (int b = 0; b < num_tokens; b++)
+        {
+            int pos = start_pos + b;
+
+            // Process all query heads
+            for (int h = 0; h < p->n_heads; h++)
+            {
+                float *q = s->batch_q + b * att_head_dim + h * p->head_dim;
+
+                // Apply rotary position encoding to query head
+                for (int i = 0; i < p->head_dim / 2; i++)
+                {
+                    float freq = 1.0f / powf(1000000.0f, (float)i / (p->head_dim / 2));
+                    float fcr = cosf(pos * freq);
+                    float fci = sinf(pos * freq);
+
+                    float x_q = q[i];
+                    float y_q = q[i + p->head_dim / 2];
+                    q[i] = x_q * fcr - y_q * fci;
+                    q[i + p->head_dim / 2] = x_q * fci + y_q * fcr;
+                }
             }
-        
-            // Apply rotary position encoding 
-            for (int i = 0; i < p->head_dim/2; i++) {
-                float freq = 1.0f / powf(1000000.0f, (float)i / (p->head_dim/2));
-                float fcr = cosf(pos * freq);
-                float fci = sinf(pos * freq);
-        
-                // Rotate query head
-                float x_q = q[i];
-                float y_q = q[i + p->head_dim/2];
-                q[i] = x_q * fcr - y_q * fci;
-                q[i + p->head_dim/2] = x_q * fci + y_q * fcr;
-        
-                // Rotate key head if within n_kv_heads
-                if (h < p->n_kv_heads) {
+
+            // Process key heads (only up to n_kv_heads)
+            for (int h = 0; h < p->n_kv_heads; h++)
+            {
+                float *k = s->batch_k + b * kv_dim + h * p->head_dim;
+
+                // Apply rotary position encoding to key head
+                for (int i = 0; i < p->head_dim / 2; i++)
+                {
+                    float freq = 1.0f / powf(1000000.0f, (float)i / (p->head_dim / 2));
+                    float fcr = cosf(pos * freq);
+                    float fci = sinf(pos * freq);
+
                     float x_k = k[i];
-                    float y_k = k[i + p->head_dim/2];
+                    float y_k = k[i + p->head_dim / 2];
                     k[i] = x_k * fcr - y_k * fci;
-                    k[i + p->head_dim/2] = x_k * fci + y_k * fcr;
+                    k[i + p->head_dim / 2] = x_k * fci + y_k * fcr;
                 }
             }
         }
+
+        // Update KV cache for all tokens in batch
+        for (int b = 0; b < num_tokens; b++) {
+            int pos = start_pos + b;
+            float* k_cache = s->key_cache + loff + pos * kv_dim;
+            float* v_cache = s->value_cache + loff + pos * kv_dim;
+
+            memcpy(k_cache, s->batch_k + b * kv_dim, kv_dim * sizeof(float));
+            memcpy(v_cache, s->batch_v + b * kv_dim, kv_dim * sizeof(float));
+        }
         
-        // multihead attention. iterate over all heads
-        int h;
-        #pragma omp parallel for private(h)
-        for (h = 0; h < p->n_heads; h++) {
-            // get the query vector for this head
-            float* q = s->q + h * p->head_dim;
-            // attention scores for this head
-            float* att = s->att + h * p->seq_len;
-            // iterate over all timesteps, including the current one
-            for (int t = 0; t <= pos; t++) {
-                // get the key vector for this head and at this timestep
-                float* k = s->key_cache + loff + t * kv_dim + (h / kv_mul) * p->head_dim;                
-                // calculate the attention score as the dot product of q and k
-                float score = 0;
-                for (int i = 0; i < p->head_dim; i++)
-                    score += q[i] * k[i];
-                // save the score to the attention buffer
-                att[t] = score / sqrtf(p->head_dim);
-            }
+        // Multihead attention with causal masking
+        for (int b = 0; b < num_tokens; b++) {
+            int current_pos = start_pos + b;
+            
+            #pragma omp parallel for
+            for (int h = 0; h < p->n_heads; h++) {
+                // Get the query vector for this head and batch item
+                float *q = s->batch_q + b * att_head_dim + h * p->head_dim;
+                // Attention scores for this head
+                float *att = s->batch_att + b * p->n_heads * p->seq_len + h * p->seq_len;
 
-            // softmax the scores to get attention weights, from 0..pos inclusively
-            softmax(att, pos + 1);
+                // Iterate over all timesteps up to current position (causal masking)
+                for (int t = 0; t <= current_pos; t++) {
+                    // Get the key vector for this head and timestep
+                    float* k = s->key_cache + loff + t * kv_dim + (h / kv_mul) * p->head_dim;                
+                    
+                    // Calculate the attention score as dot product of q and k
+                    float score = 0;
+                    for (int i = 0; i < p->head_dim; i++)
+                        score += q[i] * k[i];
+                    // Save the score to the attention buffer
+                    att[t] = score / sqrtf(p->head_dim);
+                }
 
-            // weighted sum of the values, store back into xb   
-            float* xb3 = s->xb3 + h * p->head_dim;
-            memset(xb3, 0, p->head_dim * sizeof(float));
-            for (int t = 0; t <= pos; t++) {
-                // get the value vector for this head and at this timestep
-                float *v = s->value_cache + loff + t * kv_dim + (h / kv_mul) * p->head_dim;                
-                // get the attention weight for this timestep
-                float a = att[t];
-                // accumulate the weighted value into xb3
-                for (int i = 0; i < p->head_dim; i++)
-                    xb3[i] += a * v[i];
+                // Softmax the scores to get attention weights, from 0..current_pos inclusively
+                softmax(att, current_pos + 1);
+
+                // Weighted sum of the values, store back into batch_xb3
+                float *xb3 = s->batch_xb3 + b * att_head_dim + h * p->head_dim;
+                memset(xb3, 0, p->head_dim * sizeof(float));
+                
+                for (int t = 0; t <= current_pos; t++) {
+                    // Get the value vector for this head and timestep
+                    float *v = s->value_cache + loff + t * kv_dim + (h / kv_mul) * p->head_dim;                
+                    // Get the attention weight for this timestep
+                    float a = att[t];
+                    // Accumulate the weighted value into xb3
+                    for (int i = 0; i < p->head_dim; i++)
+                        xb3[i] += a * v[i];
+                }
             }
         }
 
-        matmul(s->xb2, s->xb3, w->wo + l *layer_offset, att_head_dim, p->dim); 
+        // Output projection for batch
+        batch_matmul(s->batch_xb2,
+                     s->batch_xb3,
+                     w->wo + l * layer_offset,
+                     att_head_dim, p->dim,
+                     num_tokens);
 
-        // residual connection back into s->x
-        for (int i = 0; i < p->dim; i++)
-            s->x[i] += s->xb2[i];
-
-        // ffn rmsnorm
-        rmsnorm(s->xb, s->x, w->rms_ffn_weight + l *layer_offset /* * p->dim*/ , p->dim);
-
-        matmul(s->hb, s->xb, w->w1 + l *layer_offset, p->dim, p->hidden_dim);
-        matmul(s->hb2, s->xb, w->w3 + l *layer_offset, p->dim, p->hidden_dim);
-
-        // SwiGLU non-linearity
-        for (int i = 0; i < p->hidden_dim; i++) {
-            float val = s->hb2[i];
-            // silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
-            val *= (1.0f / (1.0f + expf(-val)));
-            // elementwise multiply with w3(x)
-            val *= s->hb[i];
-            s->hb2[i] = val;
+        // Residual connection back into batch_x
+        for (int b = 0; b < num_tokens; b++) {
+            for (int i = 0; i < p->dim; i++)
+                s->batch_x[b * p->dim + i] += s->batch_xb2[b * p->dim + i];
         }
 
-        // matmul to get the final ffn output
-        // quantize(&s->hq, s->hb, p->hidden_dim);
-        matmul(s->xb, s->hb2, w->w2 + l *layer_offset, p->hidden_dim, p->dim);
+        // FFN rmsnorm for batch
+        batch_rmsnorm(s->batch_xb,
+                      s->batch_x,
+                      w->rms_ffn_weight + l * layer_offset,
+                      p->dim,
+                      num_tokens);
 
-        // residual connection이
-        for (int i = 0; i < p->dim; i++)
-            s->x[i] += s->xb[i];
+        // FFN matrix multiplications for batch
+        batch_matmul(s->batch_hb,
+                     s->batch_xb,
+                     w->w1 + l * layer_offset,
+                     p->dim, p->hidden_dim,
+                     num_tokens);
+        batch_matmul(s->batch_hb2,
+                     s->batch_xb,
+                     w->w3 + l * layer_offset,
+                     p->dim, p->hidden_dim,
+                     num_tokens);
+
+        // SwiGLU non-linearity for batch
+        for (int b = 0; b < num_tokens; b++) {
+            for (int i = 0; i < p->hidden_dim; i++) {
+                float val = s->batch_hb2[b * p->hidden_dim + i];
+                // silu(x)=x*σ(x), where σ(x) is the logistic sigmoid
+                val *= (1.0f / (1.0f + expf(-val)));
+                // elementwise multiply with w3(x)
+                val *= s->batch_hb[b * p->hidden_dim + i];
+                s->batch_hb2[b * p->hidden_dim + i] = val;
+            }
+        }
+
+        // Final FFN output for batch
+        batch_matmul(s->batch_xb,
+                     s->batch_hb2,
+                     w->w2 + l * layer_offset,
+                     p->hidden_dim,
+                     p->dim,
+                     num_tokens);
+
+        // Residual connection for batch
+        for (int b = 0; b < num_tokens; b++) {
+            for (int i = 0; i < p->dim; i++)
+                s->batch_x[b * p->dim + i] += s->batch_xb[b * p->dim + i];
+        }
     }
 
-    // rmsnorm right before logiting
+    // For simplicity, return logits for the last token in batch
+    // Copy last token's hidden state to original state buffer
+    memcpy(s->x, s->batch_x + (num_tokens - 1) * p->dim, p->dim * sizeof(float));
+
+    // Final rmsnorm and logits computation
     rmsnorm(s->x, s->x, w->rms_final_weight, p->dim);
-    
-    matmul(s->logits, s->x, w->wcls, p->dim, p->vocab_size); 
+    matmul(s->logits, s->x, w->wcls, p->dim, p->vocab_size);
+
+
 
     return s->logits;
 }
+
+
+
 
 // ----------------------------------------------------------------------------
 // TOKENIZER
@@ -944,6 +1067,7 @@ void chat(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, char
     long timer2 = -1;  // TTFT timer start
     long t_ttft = 0;       // TTFT 
     int count = 0; // decoded token
+    int prompt_batch = 1; // prompt or multi-turn aggregation
 
     while (1) { 
         if (user_turn) {
@@ -976,7 +1100,7 @@ void chat(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, char
             pos = 0; // reset the user index
             user_turn = 0;  
             if (multi_turn) {
-            append_tokens(tb, prompt_tokens, num_prompt_tokens);
+                append_tokens(tb, prompt_tokens, num_prompt_tokens);
                 for (size_t i = 0; i < tb->size; i++) {
                     // printf("%d ", tb->data[i]);
                 }
@@ -985,20 +1109,30 @@ void chat(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, char
             printf("A: ");
         }
 
-        if (pos < (multi_turn ? tb->size : num_prompt_tokens)) {
-            token = (multi_turn) ? tb->data[pos] : prompt_tokens[pos];
-        } else {
-            token = next;
-        }
-        //printf("right before foreward: %d\n", token);
-        // forward the transformer to get logits for the next token
-        float* logits = forward(transformer, token, pos);
-        next = sample(sampler, logits);
+        // PROMPT PROCESSING PHASE: Use batch processing for prompt
+        // or multi-turn aggregation
+        int batch_tokens = (multi_turn ? tb->size : num_prompt_tokens);
+        if (prompt_batch) {
+            int *tokens_to_process = (multi_turn) ? tb->data : prompt_tokens;
+            int total_prompt_tokens = batch_tokens;
+            //int remaining_tokens = total_prompt_tokens - pos;
 
-        pos++;
+            // Process all remaining prompt tokens in one batch
+            float *logits = forward_batch(transformer, tokens_to_process, total_prompt_tokens, pos);
+            next = sample(sampler, logits);
+            pos = batch_tokens; // Move position to end of prompt
+            prompt_batch = 0;
+        }
+        else {
+            // GENERATION PHASE: Process one generated token at a time
+            float *logits = forward_batch(transformer, &next, 1, pos);
+            next = sample(sampler, logits);
+            pos++;
+        }
+
         //printf("num_prompt_tokens: %d \n", num_prompt_tokens);
         // decoding and printing
-        if (pos >= (multi_turn ? tb->size : num_prompt_tokens)) {
+        if (pos >= batch_tokens) {
             if (multi_turn) {
                 append_tokens(tb, &next, 1);
                 //printf("next token: %d\n",  next);
@@ -1006,19 +1140,17 @@ void chat(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, char
             
             if (next == 151645) { // EOS token ID - TODO
                 printf("\n");
-                user_turn = 1;
-                
+                user_turn = 1; prompt_batch = 1;
+
                 // TPS
                 if (tps) {
                     fprintf(stderr, "tok/s: %f\n", count / (double)(time_in_ms() - timer) * 1000);
-                    timer = -1;
-                    count = 0;
+                    timer = -1; count = 0;
                 }
                 // TTFT
                 if (ttft) {
                     fprintf(stderr, "TTFT: %ld ms\n", t_ttft);
-                    timer2 = -1;
-                    t_ttft = 0;
+                    timer2 = -1; t_ttft = 0;
                 }
             }
             else {

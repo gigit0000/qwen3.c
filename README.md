@@ -6,7 +6,13 @@ Just for clarity, the tokenizer reads vocab and merges from .txt files, which ma
 
 The C code runs the `0.6B Qwen3` model in full precision for simplicity. Since GGUF models are quantized to 8-bit or lower, you should use the FP32 version by cloning from HF, or you can convert from BF16 yourself via the conversion script in this repo. I tweaked it to ensure the layers are sorted in consecutive numerical order, since memory mapping in C jumps block by block.
 
-
+### UPDATE
+[Aug-15-25] Batch process prompts and past conversation turns. Reduce latency by 25% 
+```sh
+$ gcc -O3 -o runba  runba.c -lm
+./runba Qwen3-0.6B-FP32.gguf -r 1 -f 1 
+```  
+[What's next] Prefix caching
 
 ## Quick Start
 
