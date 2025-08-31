@@ -285,6 +285,35 @@ void load_config(Transformer *t) {
 
 // ----------------------------------------------------------------------------
 // neural net blocks; the dynamics of the Transformer
+void rmsnorm(float *o, float *x, float *weight, int size) {
+    // calculate sum of squares
+    float ss = 0.0f;
+    for (int j = 0; j < size; j++) {
+        ss += x[j] * x[j];
+    }
+    ss /= size;
+    ss += 1e-6f;
+    ss = 1.0f / sqrtf(ss);
+    // normalize and scale
+    for (int j = 0; j < size; j++) {
+        o[j] = weight[j] * (ss * x[j]);
+    }
+}
+
+void matmul(float* xout, float* x, float* w, int n, int d) {
+    // W (d,n) @ x (n,) -> xout (d,)
+    // by far the most amount of time is spent inside this little function
+    int i;
+    #pragma omp parallel for private(i)
+    for (i = 0; i < d; i++) {
+        float val = 0.0f;
+        for (int j = 0; j < n; j++) {
+            val += w[i * n + j] * x[j];
+        }
+        xout[i] = val;
+    }
+}
+
 void softmax(float* x, int size) {
     // find max value (for numerical stability)
     float max_val = x[0];
@@ -428,7 +457,7 @@ float* forward_batch(Transformer* transformer, int* tokens, int num_tokens, int 
             }
         }
 
-        // Update KV cache for all tokens in batch
+        // Update KV cache for all tokens in batch 
         for (int b = 0; b < num_tokens; b++) {
             int pos = start_pos + b;
             float* k_cache = s->key_cache + loff + pos * kv_dim;
