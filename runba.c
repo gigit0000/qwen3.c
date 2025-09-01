@@ -284,7 +284,7 @@ void load_config(Transformer *t) {
 }
 
 // ----------------------------------------------------------------------------
-// neural net blocks; the dynamics of the Transformer
+// neural net blocks; the dynamics of the Transformer 
 void rmsnorm(float *o, float *x, float *weight, int size) {
     // calculate sum of squares
     float ss = 0.0f;
@@ -376,8 +376,8 @@ void batch_matmul(float *batch_xout, float *batch_x, float *w, int n, int d, int
     }
 }
 
-
-float* forward_batch(Transformer* transformer, int* tokens, int num_tokens, int start_pos) {
+float *forward_batch(Transformer *transformer, int *tokens, int num_tokens, int start_pos, int past_tokens)
+{
     Config* p = &transformer->config;
     TransformerWeights* w = &transformer->weights;
     RunState* s = &transformer->state;
@@ -387,14 +387,26 @@ float* forward_batch(Transformer* transformer, int* tokens, int num_tokens, int 
     int att_head_dim = p->n_heads * p->head_dim; 
 
     int layer_offset = 62923776/4; // offset to the GGUF next layer for the same tensor type TODO
-    
-    // Copy token embeddings for all tokens in batch
-    for (int b = 0; b < num_tokens; b++) {
-        memcpy(s->batch_x + b * p->dim, 
-               w->token_embedding_table + tokens[b] * p->dim, 
-               p->dim * sizeof(float));
+
+    // num_tokens = total number of tokens in one go, including batch process     
+    // For prefix caching
+    // past_tokens is 0, when 1) it is the inital conversation, or 
+    // 2) it is the generation phase.
+ 
+    // When there are past tokens, only the rest (prompts) are processed.
+    if (past_tokens > 0) {
+        num_tokens = num_tokens - past_tokens;
     }
-    
+
+    // Copy token embeddings for all tokens in batch
+    // In prefix caching, only new prompts and
+    // generated tokens are processed and save KV caches
+    for (int b = 0; b < num_tokens; b++) {
+        memcpy(s->batch_x + b * p->dim,
+               w->token_embedding_table + tokens[b + past_tokens] * p->dim,
+               p->dim * sizeof(float)); // past_tokens for prefix caching
+    }
+
     // Forward all the layers
     for (int l = 0; l < p->n_layers; l++) {
         int loff = l * p->seq_len * kv_dim;
@@ -414,9 +426,20 @@ float* forward_batch(Transformer* transformer, int* tokens, int num_tokens, int 
         batch_rmsnorm(s->batch_k, s->batch_k, w->wk_norm + l * layer_offset, p->head_dim, num_tokens * p->n_kv_heads);
 
         // Apply rotary position encoding
+        // num_tokens is 1 in the generation phase
         for (int b = 0; b < num_tokens; b++)
         {
-            int pos = start_pos + b;
+            // start_pos is the postion mark of batch or generation.
+            // Encode the RoPE except the cached tokens.
+            // TODO - Reduce variables
+            int pos;
+            if (past_tokens > 0) {
+                pos = past_tokens + start_pos + b;
+            }
+            else {
+                pos = start_pos + b;
+            }
+
 
             // Process all query heads
             for (int h = 0; h < p->n_heads; h++)
@@ -458,8 +481,15 @@ float* forward_batch(Transformer* transformer, int* tokens, int num_tokens, int 
         }
 
         // Update KV cache for all tokens in batch 
+        // Do not save caches if multi_turn
         for (int b = 0; b < num_tokens; b++) {
-            int pos = start_pos + b;
+            int pos;
+            if (past_tokens > 0) {
+                pos = past_tokens + start_pos + b;
+            }
+            else {
+                pos = start_pos + b;
+            }
             float* k_cache = s->key_cache + loff + pos * kv_dim;
             float* v_cache = s->value_cache + loff + pos * kv_dim;
 
@@ -469,8 +499,13 @@ float* forward_batch(Transformer* transformer, int* tokens, int num_tokens, int 
         
         // Multihead attention with causal masking
         for (int b = 0; b < num_tokens; b++) {
-            int current_pos = start_pos + b;
-            
+            int current_pos;
+            if (past_tokens > 0) {
+                current_pos = past_tokens + start_pos + b;
+            }
+            else {
+                current_pos =  start_pos + b;
+            }
             #pragma omp parallel for
             for (int h = 0; h < p->n_heads; h++) {
                 // Get the query vector for this head and batch item
@@ -581,9 +616,6 @@ float* forward_batch(Transformer* transformer, int* tokens, int num_tokens, int 
 
     return s->logits;
 }
-
-
-
 
 // ----------------------------------------------------------------------------
 // TOKENIZER
@@ -1097,6 +1129,9 @@ void chat(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, char
     long t_ttft = 0;       // TTFT 
     int count = 0; // decoded token
     int prompt_batch = 1; // prompt or multi-turn aggregation
+    int past_tokens = 0; // total prev convesation tokens count for prefix caching
+
+
 
     while (1) { 
         if (user_turn) {
@@ -1128,16 +1163,20 @@ void chat(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, char
             encode(tokenizer, rendered_prompt, prompt_tokens, &num_prompt_tokens, multi_turn);
             pos = 0; // reset the user index
             user_turn = 0;  
+            // Add prompt tokens first to the convesation history buffer, tb
+            // for multi-turn conversations
             if (multi_turn) {
                 append_tokens(tb, prompt_tokens, num_prompt_tokens);
                 for (size_t i = 0; i < tb->size; i++) {
-                    // printf("%d ", tb->data[i]);
                 }
                 printf("\n");
             }
             printf("A: ");
         }
-
+        
+        // For batch processing logic, 2 phases are set. Prompts
+        // or past conversations pass as a batch. Generated token 
+        // passes one by one.
         // PROMPT PROCESSING PHASE: Use batch processing for prompt
         // or multi-turn aggregation
         int batch_tokens = (multi_turn ? tb->size : num_prompt_tokens);
@@ -1146,15 +1185,23 @@ void chat(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, char
             int total_prompt_tokens = batch_tokens;
             //int remaining_tokens = total_prompt_tokens - pos;
 
-            // Process all remaining prompt tokens in one batch
-            float *logits = forward_batch(transformer, tokens_to_process, total_prompt_tokens, pos);
+            // prefix caching for multiturn. if 0, it's a single-turn
+            //tb->size == num_prompt_tokens, then it's the first turn or single-turn.
+            // past_tokens counts the number of KV-cached tokens.
+            // Only new prompts do the full pass through transformer layers
+            past_tokens = (multi_turn ? tb->size - num_prompt_tokens : 0);
+            // Process all prompt tokens and/or prev conversations in one batch
+            float* logits = forward_batch(transformer, tokens_to_process, total_prompt_tokens, pos, past_tokens);
             next = sample(sampler, logits);
+            // Switch to the generation phase
             pos = batch_tokens; // Move position to end of prompt
-            prompt_batch = 0;
+            prompt_batch = 0;   
         }
         else {
             // GENERATION PHASE: Process one generated token at a time
-            float *logits = forward_batch(transformer, &next, 1, pos);
+            // cache_mode = 2 (generation), then is should be saved to the cache and use all the previous kv values
+            //past_tokens=0 for prefix caching in generation phase
+            float* logits = forward_batch(transformer, &next, 1, pos, 0);            
             next = sample(sampler, logits);
             pos++;
         }
@@ -1164,7 +1211,6 @@ void chat(Transformer* transformer, Tokenizer* tokenizer, Sampler* sampler, char
         if (pos >= batch_tokens) {
             if (multi_turn) {
                 append_tokens(tb, &next, 1);
-                //printf("next token: %d\n",  next);
             }
             
             if (next == 151645) { // EOS token ID - TODO

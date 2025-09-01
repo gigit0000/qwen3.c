@@ -2,17 +2,22 @@
 
 `qwen3.c` is a minimal, single-file C implementation of Qwen3 model inference, designed to run without any dependencies and inherited from llama2.c. It directly loads GGUF-format tensors without any conversion, making it self-contained.
 
-Just for clarity, the tokenizer reads vocab and merges from .txt files, which makes it way easier to understand. The overhead from tokenization and detokenization from text files is negligible compared to the forward pass, so it has little to no effect on TTS. The  implementation supports multi-turn conversation, but it uses a naive full-token pass, which causes TTFT or the prefill time to increase as the number of tokens grows at the moment. With OpenMP enabled, TPS stays decent at about 6 tokens per second on a 4-core machine. 
+Just for clarity, the tokenizer reads vocab and merges from .txt files, which makes it way easier to understand. The overhead from tokenization and detokenization from text files is negligible compared to the forward pass, so it has little to no effect on TTS. The  implementation supports multi-turn conversation, ~~but it uses a naive full-token pass, which causes TTFT or the prefill time to increase as the number of tokens grows at the moment.~~ and sustains the same TTFT as in single-turn conversation. With OpenMP enabled, TPS stays decent at about 6 tokens per second on a 4-core machine. 
 
 The C code runs the `0.6B Qwen3` model in full precision for simplicity. Since GGUF models are quantized to 8-bit or lower, you should use the FP32 version by cloning from HF, or you can convert from BF16 yourself via the conversion script in this repo. I tweaked it to ensure the layers are sorted in consecutive numerical order, since memory mapping in C jumps block by block.
 
 ### UPDATE
-[Aug-15-25] Batch process prompts and past conversation turns. Reduce latency by 25% 
+[Sep-01-25] **Prefix caching** feature is added. Multi-turn TTFT is now consistent and the same as in single-turn conversations for the same token counts. In OMP_NUM_THREADS=4, the TTFT is ~2 secs.
+```sh
+$ make runbaomp
+$ OMP_NUM_THREADS=4 ./runba  Qwen3-0.6B-FP32.gguf -r 1 -f 1 -m 1
+```
+[What's next] Further TTFT reduction or quantization
+[Aug-15-25] **Batch process** prompts and past conversation turns. Reduce latency by 25% 
 ```sh
 $ gcc -O3 -o runba  runba.c -lm
 ./runba Qwen3-0.6B-FP32.gguf -r 1 -f 1 
 ```  
-[What's next] Prefix caching
 
 ## Quick Start
 

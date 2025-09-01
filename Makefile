@@ -33,6 +33,15 @@ runomp: run.c
 	$(CC) -O3 -fopenmp -march=native run.c  -lm  -o run
 
 
+.PHONY: runba
+runba: runba.c
+	$(CC) -O3 -o runba runba.c -lm
+
+
+.PHONY: runbaomp
+runbaomp: runba.c
+	$(CC) -O3 -fopenmp -march=native runba.c  -lm  -o runba
+
 .PHONY: clean
 clean:
 	rm -f run
