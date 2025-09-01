@@ -12,12 +12,12 @@ The C code runs the `0.6B Qwen3` model in full precision for simplicity. Since G
 $ make runbaomp
 $ OMP_NUM_THREADS=4 ./runba  Qwen3-0.6B-FP32.gguf -r 1 -f 1 -m 1
 ```
-[What's next] Further TTFT reduction or quantization
 [Aug-15-25] **Batch process** prompts and past conversation turns. Reduce latency by 25% 
 ```sh
 $ gcc -O3 -o runba  runba.c -lm
 ./runba Qwen3-0.6B-FP32.gguf -r 1 -f 1 
 ```  
+[**What's next**] Further TTFT reduction or quantization<br>
 
 ## Quick Start
 
